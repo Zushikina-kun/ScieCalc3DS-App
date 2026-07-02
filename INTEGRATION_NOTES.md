@@ -170,19 +170,23 @@ remove.
 
 ## Optional: New3DS syscore for the calculation thread (touches keyboard.cpp)
 
-Everything above this point is additive-only, by design. This one isn't -
-it's a one-line change to existing, working code, so treat it as optional
-and test it more carefully before trusting it.
+**Skip this entirely if you are on an original 3DS or 2DS.** This change
+only benefits New3DS hardware (the model with the extra CPU cores). On
+original 3DS there is no syscore, so none of this applies and applying it
+would be pointless at best.
 
-**What I found:** `main.cpp` already calls `APT_SetAppCpuTimeLimit(30)` at
-startup. On New3DS, that's specifically what grants an app permission to
-run a thread on the syscore (the extra core New3DS has that Old3DS/2DS
-doesn't). But `keyboard.cpp`'s calculation thread is created with a fixed
-affinity of `1` (the second core every 3DS model has), so that permission
-is currently requested but never used. Either this was set up for a
-feature that never got finished, or it's simply unused - either way, on
-New3DS specifically, the calculation thread is currently competing with
-the main render thread for time on core 1 instead of getting a core to
+If you are on a New3DS and want to apply it anyway, the original notes are
+preserved below for reference. Everything above this section is what
+actually matters for original 3DS.
+
+<details>
+<summary>New3DS-only: syscore thread affinity change (click to expand)</summary>
+
+`main.cpp` already calls `APT_SetAppCpuTimeLimit(30)` at startup. On
+New3DS, that grants permission to run a thread on the syscore (the extra
+core Old3DS/2DS doesn't have). But `keyboard.cpp`'s calculation thread is
+created with affinity `1`, so that permission is never used - the thread
+competes with the render thread on core 1 instead of getting a core to
 itself.
 
 **The change** (`source/keyboard.cpp`, inside `Keyboard::start_calculating`):
@@ -192,29 +196,19 @@ itself.
 calcThread = threadCreate(calculation_loop, this, 256 * 1024, 31, 1, false);
 
 // after:
-s32 calc_core = 1; // default: core 1, present on every 3DS model
+s32 calc_core = 1;
 bool is_n3ds = false;
 if(R_SUCCEEDED(APT_CheckNew3DS(&is_n3ds)) && is_n3ds)
 {
-    calc_core = -2; // New3DS syscore - reachable only because main.cpp
-                     // already calls APT_SetAppCpuTimeLimit(30) at startup
+    calc_core = -2; // New3DS syscore
 }
 calcThread = threadCreate(calculation_loop, this, 256 * 1024, 31, calc_core, false);
 ```
 
-On Old3DS/2DS, `is_n3ds` is false, `calc_core` stays `1`, and behavior is
-byte-for-byte identical to today. The only thing that changes is New3DS
-behavior, and only in which core the thread lands on - the thread body
-(`calculation_loop`) isn't touched at all.
+On Old3DS/2DS `calc_core` stays `1` and behavior is identical to today.
+Test on both hardware types before trusting this.
 
-**What to specifically test if you apply this:** run on (or in Citra with
-New3DS mode enabled) both an Old3DS/2DS and a New3DS, and confirm
-calculations still complete and the result still shows up correctly on
-both. `APT_CheckNew3DS` failing (the `R_SUCCEEDED` check) falls back to the
-existing behavior, so a failed detection can't make things worse - but I'd
-still want to see it actually exercised on New3DS hardware before trusting
-it, since core-affinity issues tend to show up as intermittent scheduling
-weirdness rather than a clean crash.
+</details>
 
 ## Testing checklist before you trust this
 
@@ -238,9 +232,6 @@ weirdness rather than a clean crash.
    memory tools if you have them).
 8. Press HOME, wait, return to the app - confirm the graph screen looks
    correct afterward (this is what the sleep hook is defending against).
-9. If you apply the optional New3DS core-affinity patch: run a calculation
-   on both an Old3DS/2DS and a New3DS (or Citra in New3DS mode) and confirm
-   identical results on both.
 
 ## Next pieces, in the order I'd tackle them
 1. Fix whatever the build/test pass above turns up.
