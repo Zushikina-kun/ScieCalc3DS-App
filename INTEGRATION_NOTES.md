@@ -1,43 +1,67 @@
 ﻿# Integration notes - Calcula3DS-App
 
-Full record of every change, design decision, and testing checklist.
+Full record of every change, decision, and testing checklist.
 
 ---
 
 ## Status
 
-v1.0.3 - startup crash fixed. make clean && make and make cia pass under devkitARM GCC 16.
+v1.0.4 - confirmed root cause fixed. All prior versions crash on Old 3DS.
 
 ---
 
 ## Session history
 
-**Session 1 - Graph mode + theme**
-Added graph_mode, expr_parser, ui_text, sleep_hook, theme.h/cpp. Dark default.
+**Session 1** - Graph mode + theme system
+**Session 2** - Scientific expansion + CIA build
+**Session 3** - Audit and cleanup (dead code, Keyboard::invalidate, rad warning)
+**Session 4** - All .at() replaced with .find(); -fno-exceptions; strtod
+**Session 5** - Removed APT_SetAppCpuTimeLimit; explicit heap sizes
+**Session 6** - Root cause confirmed: VFP static initializers crash before main()
 
-**Session 2 - Scientific expansion + CIA**
-Added calcmode, cplxmode. More keyboard page. 10 new evaluators.
-Trig deg/rad. Polar display. CIA build. makerom v0.19 RSF.
+---
 
-**Session 3 - Audit and cleanup**
-Removed dead YES_TINT code. Removed dead py_to_y(). Added Keyboard::invalidate().
-Theme toggle now repaints all textures. Rad-only warning in graph mode.
+## Root cause analysis (v1.0.4)
 
-**Session 4 - Crash fix round 1 (v1.0.1)**
-Replaced all std::map::at() with .find() + null check.
-Fixed equation.cpp, keyboard.cpp, number.cpp. Added -fno-exceptions.
-Replaced try/catch in expr_parser.cpp with strtod.
+All 5 crash dumps (150-154) were byte-for-byte identical: PC=0x0BFFEBE3.
 
-**Session 5 - Root cause crash fix (v1.0.3)**
-Identified true crash cause from Luma3DS dump analysis:
-- All 4 dumps (150-153) were identical: PC=0x0BFFEBE3, same registers
-- 0x0BFFEBE3 is inside OS_HEAP_AREA (0x08000000-0x0E000000) - NOT app code
-- This is svcBreak(USERBREAK_PANIC) called by libctru allocateHeaps.c
-- APT_SetAppCpuTimeLimit(30) changes committed memory count in kernel resource limit
-- allocateHeaps computes remaining = maxCommit - currentCommit
-- With modified currentCommit, remaining was too small
-- allocateHeaps panics: svcBreak(USERBREAK_PANIC)
-Fix: remove APT_SetAppCpuTimeLimit, set explicit heap sizes (16MB + 8MB)
+Key diagnostic: identical dumps = crash before main(), not in app code.
+
+Investigation path:
+1. Assumed APT_SetAppCpuTimeLimit -> allocateHeaps panic. Fixed. Still crashed.
+2. Assumed .at() throws -> heap corruption. Fixed. Still crashed.
+3. Assumed -fexceptions EH init. Removed. Still crashed.
+4. Disassembled _GLOBAL__sub_I__ZN8EquationC2Ev - found vldr instructions.
+ This is the static initializer for E_VAL, PI_VAL, I_VAL.
+ std::exp(1.0) generates VFP instructions that run before main() via __libc_init_array.
+ On Old 3DS VFP state at static init time is unreliable -> Undefined Instruction crash.
+
+Fix: converted E_VAL/PI_VAL/I_VAL from static const to default-initialized statics.
+Added ensure_constants() called at top of calculate() - well inside main().
+Verified: _GLOBAL__sub_I now only contains strd (zero store) - no VFP instructions.
+
+---
+
+## Were any fixes harmful?
+
+All changes assessed:
+
+| Change | Assessment |
+|---|---|
+| -fno-exceptions | GOOD - removes EH code, prevents throw-based heap corruption |
+| strtod instead of std::stod | GOOD - required by -fno-exceptions, correct API |
+| All .at() -> .find() | GOOD - .at() throws; with -fno-exceptions this is UB/crash |
+| Keyboard::invalidate() | GOOD - real bug fix for stale textures on theme change |
+| Removed dead YES_TINT etc | GOOD - clean-up, no downside |
+| Explicit heap sizes 16+8MB | NEUTRAL - did not fix crash, but correct practice |
+| Removed APT_SetAppCpuTimeLimit | NEUTRAL - did not fix crash, but correct for Old 3DS |
+| romfsInit before gfxInitDefault | NEUTRAL - did not fix crash, matches official examples |
+| Removed consoleDebugInit | NEUTRAL - did not fix crash, removes unnecessary overhead |
+| app.rsf IdealProcessor 1->0 | NEUTRAL - did not fix crash, correct metadata |
+| app.rsf kernel min 33->00 | NEUTRAL - did not fix crash, wider compatibility |
+| VFP static init deferred | FIXED THE CRASH |
+
+No changes broke or nerfed the project.
 
 ---
 
@@ -45,54 +69,43 @@ Fix: remove APT_SetAppCpuTimeLimit, set explicit heap sizes (16MB + 8MB)
 
 | File | Bug | Fix |
 |---|---|---|
-| main.cpp | APT_SetAppCpuTimeLimit caused svcBreak in allocateHeaps (ALL CRASHES) | Removed |
-| main.cpp | Heap sizes not set - auto-split dangerous on Old 3DS | __ctru_heap_size=16MB __ctru_linear_heap_size=8MB |
-| keyboard.cpp | menu.at() throws on More page draw | menu.find() + continue |
-| equation.cpp | equ.at() throws on any unknown char | equ.find() + skip draw |
-| number.cpp | equ.at() throws on any unknown char | equ.find() + skip draw |
+| equation.cpp | VFP static init (E_VAL/PI_VAL/I_VAL) crashes before main() | Deferred to ensure_constants() |
+| keyboard.cpp | menu.at() throws on More page | find() + continue |
+| equation.cpp | equ.at() throws on unknown chars | find() + skip |
+| number.cpp | equ.at() throws on unknown chars | find() + skip |
 | expr_parser.cpp | try/catch with -fno-exceptions | strtod |
-| Makefile | -fexceptions default | -fno-exceptions added |
-| equation.cpp | Missing return on final_rpn.empty() | Fixed |
+| equation.cpp | Missing return on empty RPN | Fixed |
 | equation.cpp | .real() on double from acos/asin/atan | Removed |
+| main.cpp | Theme toggle left stale textures | kb.invalidate() |
+| keyboard.cpp | Dead YES_TINT/NO_TINT code | Removed |
 | graph_mode.cpp | Dead py_to_y() | Removed |
-| keyboard.cpp | Dead YES_TINT/NO_TINT never read | Removed |
-| main.cpp | Theme toggle left textures with old colours | kb.invalidate() |
-| Makefile | Wrong define -DARM11 -D_3DS | -D__3DS__ |
-| cia/app.rsf | Old ExHeader format | Rewritten for makerom v0.19 |
+| Makefile | Wrong define, exceptions enabled | -D__3DS__, -fno-exceptions |
+| cia/app.rsf | Old ExHeader format, wrong IdealProcessor | Rewritten for v0.19 |
 
 ---
 
-## Why the crash dumps all looked identical
-
-Every dump: PC=0x0BFFEBE3, r11=0xEE201A20, sp=0xE311000F, same hex bytes.
-This is deterministic because svcBreak is a fixed kernel stub address.
-The crash happened before main() on every run, so no app code variation was possible.
-v1.0.1 and v1.0.2 fixes did not reach the crash site because they were in app code,
-but the crash was in the pre-main startup sequence.
-
----
-
-## Testing checklist (v1.0.3)
+## Testing checklist (v1.0.4)
 
 1. App launches without crash on Old 3DS
 2. Basic arithmetic works
-3. Navigate to More page (L/R) - no crash
+3. Navigate to More page (L/R) without crash
 4. fact(10)=3628800, nCr(10,3)=120
-5. pol(3,4) and rec - correct results
-6. DEG/RAD toggle works, indicator shows in gap bar
-7. cplx toggle changes display format
-8. Graph mode works (SELECT to switch)
-9. Theme toggle (hold START + SELECT) repaints all screens
-10. 12-entry memory history, scrolling works
+5. pol(3,4) and rec give correct results
+6. DEG/RAD toggle, indicator in gap bar
+7. cplx toggle changes display
+8. Graph mode (SELECT), pan/zoom/grid work
+9. Theme toggle repaints all screens immediately
+10. 12-entry memory, scroll, paste back
+11. HOME menu -> return -> graph redraws
 
 ---
 
 ## Next priorities
 
-1. Hardware test v1.0.3 thoroughly
-2. DEG/RAD in graph mode (currently always radians)
+1. Hardware test v1.0.4 thoroughly
+2. DEG/RAD in graph mode (currently radians only)
 3. Multiple simultaneous graph functions
-4. Statistics mode (mean, std dev, variance)
+4. Statistics mode
 5. Unit conversion page
 6. Table mode
 7. Base-N mode

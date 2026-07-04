@@ -1,181 +1,193 @@
 ﻿
-Lessons learned building CalculaThreeDS. A reference for future 3DS homebrew projects.
+Complete reference from building CalculaThreeDS. Use this before starting any new 3DS project.
+
 ---
 
-## 1. Always set explicit heap sizes
+## 1. THE most important rule: no VFP in static initializers
 
-NEVER rely on libctru auto-split. Declare at global scope BEFORE main():
+Static const globals with float/double expressions run BEFORE main() via __libc_init_array.
+On Old 3DS the VFP unit state at that time is unreliable.
+VFP instructions (vldr, vstrd) in static initializers cause Undefined Instruction crashes.
+This crash always lands at the same PC. All dump files will be byte-for-byte identical.
+
+BAD - will crash before main():
 `"
 +=cpp
-u32 __ctru_heap_size = 16 * 1024 * 1024; // 16 MB regular heap (malloc/new)
-u32 __ctru_linear_heap_size = 8 * 1024 * 1024; // 8 MB linear heap (GPU/DMA)
+static const double E = std::exp(1.0); // vldr in _GLOBAL__sub_I -> crash on Old 3DS
+static const Number PI_VAL(M_PI); // also triggers VFP init
 `"
 +=
-Why: if both are 0 (default), libctru auto-splits remaining memory.
-APT_SetAppCpuTimeLimit() changes committed memory count, making remaining smaller.
-allocateHeaps then calls svcBreak(USERBREAK_PANIC) -> crash before main() even runs.
-This was the root cause of every CalculaThreeDS v1.0.0 through v1.0.2 crash.
 
-Memory budget on Old 3DS (64MB total, ~40-48MB usable per app):
-
-| Allocation | Recommended size |
-|---|---|
-| Stack (__stacksize__) | 512 KB |
-| Code + data | ~350-500 KB typical |
-| Regular heap (__ctru_heap_size) | 16 MB |
-| Linear heap (__ctru_linear_heap_size) | 8 MB |
-| OS/system overhead | ~16-20 MB |
-| Total used | ~35-40 MB - safe for Old 3DS |
-
----
-
-## 2. DO NOT call APT_SetAppCpuTimeLimit without explicit heap sizes
-
-APT_SetAppCpuTimeLimit(30) is intended to grant New3DS syscore (extra CPU core) access.
-Side effect on ALL 3DS models: modifies kernel committed memory count.
-Without explicit heap sizes this causes allocateHeaps to panic.
-
-Safe pattern if you need it:
+GOOD - deferred to first use inside main():
 `"
 +=cpp
-// At global scope - BEFORE main:
-u32 __ctru_heap_size = 16 * 1024 * 1024;
-u32 __ctru_linear_heap_size = 8 * 1024 * 1024;
-
-// Then inside main():
-APT_SetAppCpuTimeLimit(30); // safe now - heaps already committed at known sizes
+static double E_val = 0.0;
+static bool constants_init = false;
+void ensure_constants() {
+ if(constants_init) return;
+ E_val = std::exp(1.0); // safe here, VFP is ready inside main()
+ constants_init = true;
+}
 `"
 +=
-For a simple app that does not need New3DS CPU speed, remove it entirely.
+
+How to check your ELF for VFP static inits:
+`"
++=bash
+arm-none-eabi-nm app.elf | grep _GLOBAL__sub_I
+arm-none-eabi-objdump -d app.elf | grep -A20 _GLOBAL__sub_I
+# If you see vldr or vstrd instructions, you have the problem
+`"
++=
 
 ---
 
-## 3. Build flags
+## 2. Set explicit heap sizes before main()
+
+Never rely on libctru auto-split. Declare at global scope before main():
+`"
++=cpp
+u32 __ctru_heap_size = 16 * 1024 * 1024; // 16 MB regular heap
+u32 __ctru_linear_heap_size = 8 * 1024 * 1024; // 8 MB linear (GPU DMA)
+`"
++=
+
+Without this, libctru auto-splits remaining memory.
+APT_SetAppCpuTimeLimit() modifies the committed memory count used by auto-split,
+potentially causing svcBreak(USERBREAK_PANIC) -> crash at 0x0BFFEBE3.
+
+Old 3DS memory budget (64MB total, ~40-48MB usable per app):
+ Stack: 512 KB, Code+data: ~400 KB, Heap: 16 MB, Linear: 8 MB, OS: ~16-20 MB
+
+---
+
+## 3. APT_SetAppCpuTimeLimit
+
+Only use it if you need New3DS syscore access. For simple apps: remove it entirely.
+If you must use it: set heap sizes FIRST at global scope, then call inside main().
+
+---
+
+## 4. Required build flags
 `"
 +=makefile
-CXXFLAGS := $(CFLAGS) \ -fno-rtti -fno-exceptions -std=gnu++17
-CFLAGS += -D__3DS__ # NOT -DARM11 or -D_3DS (those cause GCC warnings)
+CXXFLAGS := \ -fno-rtti -fno-exceptions -std=gnu++17
+CFLAGS += -D__3DS__ # NOT -DARM11 or -D_3DS
 `"
 +=
 
 ---
 
-## 4. Never use throwing STL
-
-With -fno-exceptions, throws corrupt the heap on Old 3DS.
-Luma reports this as Undefined Instruction at a malloc-internal address.
+## 5. Never use throwing STL
 
 | Instead of | Use |
 |---|---|
-| map.at(key) | auto it = map.find(key); if(it != end) ... |
-| std::stod(s) | strtod(s.c_str(), &end) |
-| std::stoi(s) | strtol(s.c_str(), &end, 10) |
+| map.at(key) | auto it = map.find(key); if(it != end()) ... |
+| std::stod(s) | strtod(s.c_str(), &endp) |
+| std::stoi(s) | strtol(s.c_str(), &endp, 10) |
 | vector::at(i) | check i < size() first, then [] |
 | try/catch | return error codes |
 
 ---
 
-## 5. Luma3DS crash dump quick reference
+## 6. Correct initialization order in main()
+`"
++=cpp
+int main(int argc, char** argv)
+{
+ romfsInit();
+ C2D_SpriteSheet sprites = C2D_SpriteSheetLoad(romfs:/gfx/sprites.t3x);
+ romfsExit();
+ if(!sprites) return 1; // always null-check
 
-Dumps saved to: SD:/luma/dumps/arm11/crash_dump_XXXXXXXX.dmp (588 bytes)
+ gfxInitDefault();
+ C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
+ C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
+ C2D_Prepare();
+}
+`"
++=
 
-Key offsets in the dump:
+Do NOT call consoleDebugInit(debugDevice_SVC) in production.
+Do NOT call APT_SetAppCpuTimeLimit() unless heap sizes are pre-set.
 
-| Offset | Type | Value |
-|---|---|---|
-| 0x00 | u32 | Magic 0xDEADC0DE |
-| 0x04 | u32 | Magic 0xDEADCAFE |
-| 0x08 | u8 | Processor (3=ARM11) |
-| 0x09 | u8 | Core number |
-| 0x0A | u8 | Exception: 0=FIQ 1=Undefined 2=Prefetch 3=DataAbort 4=IRQ |
-| 0x50 | u32 x23 | Registers: r0-r12, sp, lr, pc, cpsr, dfsr, ifsr, far, fpexc, fpinst, fpinst2 |
+---
 
-PC address diagnosis:
+## 7. Crash dump analysis
+
+Dumps at: SD:/luma/dumps/arm11/crash_dump_XXXXXXXX.dmp (588 bytes)
+
+Header layout:
+ 0x00: Magic 0xDEADC0DE
+ 0x04: Magic 0xDEADCAFE
+ 0x08: Processor (3=ARM11)
+ 0x09: Core
+ 0x0A: Exception type: 0=FIQ 1=Undefined 2=Prefetch 3=Data 4=IRQ
+ 0x50: Registers r0-r12, sp, lr, pc, cpsr, dfsr, ifsr, far, fpexc, fpinst, fpinst2
+
+PC diagnosis:
 
 | PC range | Meaning |
 |---|---|
-| 0x00100000 - 0x0014FFFF | Your app code - use arm-none-eabi-addr2line to find source line |
-| 0x08000000 - 0x0E000000 | Heap area - memory setup issue or bad function pointer call |
-| 0x0BFFEBE3 specifically | svcBreak(USERBREAK_PANIC) in allocateHeaps - heap init failed |
-| Anything else | Corrupted PC - look at LR and the instruction stream in dump |
+| 0x00100000 - 0x0014FFFF | Your app code - use arm-none-eabi-addr2line |
+| 0x08000000 - 0x0E000000 | Heap area - VFP static init OR svcBreak in allocateHeaps |
+| 0x0BFFEBE3 specifically | Both causes land here on Old 3DS |
+| Anything else | Corrupted PC - examine LR and dump hex |
 
-If all crash dumps are byte-for-byte identical: crash happens before main(), not in app code.
-This means memory setup, global constructors, or the EH runtime is the culprit.
+If ALL dumps are identical: crash is before main() - check VFP statics and heap setup.
 
-Decode a dump with PowerShell:
-`"
-+=powershell
- = [System.IO.File]::ReadAllBytes(path)
- = [0xA]
- = [BitConverter]::ToUInt32(, 0x50 + 15*4)
-Write-Host (Exception:  PC: 0x{0:X8} -f )
-`"
-+=
+Decode PC from a dump (PowerShell):
+  = [System.IO.File]::ReadAllBytes(path)
+  = [BitConverter]::ToUInt32(, 0x50 + 15*4)
+ Write-Host (0x{0:X8} -f )
 
-Map PC to source line:
-`"
-+=bash
-arm-none-eabi-addr2line -e out/MyApp.elf 0xYOUR_PC_VALUE
-`"
-+=
-
-If addr2line returns ??:0, the PC is not in your code (kernel/heap/system area).
+Map PC to source (bash):
+ arm-none-eabi-addr2line -e out/App.elf 0xYOUR_PC
 
 ---
 
-## 6. makerom v0.19 RSF format changes
+## 8. makerom v0.19 RSF
 
-Old ExHeader: block is completely removed in makerom v0.19.
-All fields moved to AccessControlInfo and SystemControlInfo.
+Old ExHeader: block removed. Fields moved to AccessControlInfo / SystemControlInfo.
 
-New requirements in v0.19:
-- SaveDataSize must be a string: 0KB (not bare integer 0)
-- SystemCallAccess is now required (mapping of SVC names to numbers)
-- ServiceAccessControl is now required (list of service names like APT:U, fs:USER)
-- FileSystemAccess names changed: SdApplication removed, use DirectSdmc
+Common mistakes:
+- SaveDataSize: 0 is invalid -> use SaveDataSize: 0KB
+- IdealProcessor: 1 = system core (unavailable to apps) -> use 0
+- ReleaseKernelMinor: use 00 for widest compatibility
+- SystemCallAccess: now required
+- ServiceAccessControl: now required
+- SdApplication removed from FileSystemAccess -> use DirectSdmc
 
-See CalculaThreeDS/cia/app.rsf for a complete working example.
-
-Tools for CIA build (place both exe in devkitPro/tools/bin/):
-- bannertool: github.com/diasurgical/bannertool/releases -> windows-x86_64/bannertool.exe
-- makerom: github.com/3DSGuy/Project_CTR/releases -> makerom-vX.X.X-win_x86_64.zip
+Tools: bannertool (diasurgical/bannertool) + makerom (3DSGuy/Project_CTR)
+Place both exes in devkitPro/tools/bin/
 
 ---
 
-## 7. citro2d gotchas
-
-- C2D_SpriteSheetLoad() returns NULL on failure. Always check before using.
-- C2D_TargetClear() must be inside C3D_FrameBegin/End block.
-- Off-screen render targets: redraw only on content change, not every frame.
-- VRAM total: 6 MB. C3D_TexInitVRAM and sprite sheets both use VRAM.
-- romfsInit()/romfsExit() bracket every file load. Do not leave mounted.
-
----
-
-## 8. Old 3DS vs New 3DS
+## 9. Old 3DS vs New 3DS
 
 | Feature | Old 3DS | New 3DS |
 |---|---|---|
 | RAM | 64 MB | 256 MB |
-| App CPU cores | 1 (core 0) | 2 (core 0 + syscore) |
+| App CPU cores | 1 | 2 |
 | CPU speed | 268 MHz | 268 or 804 MHz |
-| VRAM | 6 MB | 6 MB (same) |
+| VRAM | 6 MB | 6 MB |
+| VFP at static init time | Unreliable - avoid | Usually fine |
 | APT_SetAppCpuTimeLimit | Dangerous without explicit heaps | Grants syscore |
 
-Develop with Old 3DS constraints. Code that works on New3DS may crash on Old3DS.
+Always develop and test with Old 3DS constraints.
 
 ---
 
-## 9. New project checklist
+## 10. New project checklist
 
-- [ ] __stacksize__, __ctru_heap_size, __ctru_linear_heap_size set explicitly at global scope
-- [ ] -fno-exceptions -fno-rtti in CXXFLAGS
-- [ ] -D__3DS__ (not -DARM11 or -D_3DS)
-- [ ] .find() instead of .at() everywhere
-- [ ] strtod/strtol instead of std::stod/stoi
-- [ ] Null-check C2D_SpriteSheetLoad result
-- [ ] APT_SetAppCpuTimeLimit only after explicit heap sizes, or removed entirely
-- [ ] romfsInit/Exit around all file loads
-- [ ] app.rsf uses makerom v0.19 format (SaveDataSize: 0KB, SystemCallAccess required)
-- [ ] Test in Citra before hardware
-- [ ] PC in 0x08000000+ on crash = heap setup failure, not app code
+- [ ] No float/double VFP in static const globals or static initializers
+- [ ] Check arm-none-eabi-objdump for vldr in _GLOBAL__sub_I output
+- [ ] __stacksize__, __ctru_heap_size, __ctru_linear_heap_size at global scope
+- [ ] -fno-exceptions -fno-rtti in CXXFLAGS, -D__3DS__
+- [ ] .find() not .at() everywhere; strtod not std::stod
+- [ ] romfsInit before gfxInitDefault; null-check sprite sheet
+- [ ] No APT_SetAppCpuTimeLimit without pre-set heap sizes
+- [ ] No consoleDebugInit(debugDevice_SVC) in production
+- [ ] app.rsf: IdealProcessor:0, SaveDataSize:0KB, v0.19 format
+- [ ] Test in Citra first, then real hardware
+- [ ] All crash dumps identical + Undefined Instr = VFP static init issue

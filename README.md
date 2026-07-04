@@ -1,11 +1,8 @@
 ﻿# Calcula3DS
 
-A **scientific calculator** for the Nintendo 3DS with full graphing support,
-built on [CalculaThreeDS](https://github.com/LiquidFenrir/CalculaThreeDS) by LiquidFenrir.
+Scientific calculator for Nintendo 3DS with graph mode, dark/light theme, and scientific function expansion.
 
-Adds: **graph mode**, **dark/light theme**, scientific functions (fact, nCr, nPr,
-mod, logn, floor, ceil, round, pol, rec), **deg/rad switching**, **complex display toggle**,
-and numerous stability fixes for Old 3DS.
+Built on [CalculaThreeDS](https://github.com/LiquidFenrir/CalculaThreeDS) by LiquidFenrir.
 
 ---
 
@@ -13,10 +10,11 @@ and numerous stability fixes for Old 3DS.
 
 | Version | Changes |
 |---|---|
-| v1.0.3 | **Startup crash fixed.** Removed APT_SetAppCpuTimeLimit, explicit heap sizes set. |
-| v1.0.2 | Added -fno-exceptions, null sprite check, strtod in parser. |
-| v1.0.1 | Replaced all .at() with .find() to prevent exception-based heap corruption. |
-| v1.0.0 | Initial release (crashes on startup on Old 3DS). |
+| v1.0.4 | **Real startup crash fix.** VFP static initializers (E/PI/i constants) deferred from static init to first calculate() call. All prior versions crash on Old 3DS. |
+| v1.0.3 | Removed APT_SetAppCpuTimeLimit; explicit heap sizes. Crash still present. |
+| v1.0.2 | -fno-exceptions, null sprite check, strtod. Crash still present. |
+| v1.0.1 | All .at() -> .find(). Crash still present. |
+| v1.0.0 | Initial release. Crashes on Old 3DS. |
 
 ---
 
@@ -39,24 +37,21 @@ Pretty-printed equation editor - fractions, exponents, roots render like a textb
 
 | Button | Syntax | What it does |
 |---|---|---|
-| fact | fact(n) | n! for integer n >= 0 |
+| fact | fact(n) | n! |
 | nCr | nCr(n,r) | Binomial coefficient |
 | nPr | nPr(n,r) | Permutations |
-| mod | mod(a,b) | Modulo (same sign as b) |
+| mod | mod(a,b) | Modulo |
 | logn | logn(base,x) | Log to arbitrary base |
 | floor | floor(x) | Round down |
 | ceil | ceil(x) | Round up |
 | round | round(x) | Round to nearest |
-| pol | pol(x,y) | Cartesian to polar - result shown as r>theta |
-| rec | rec(r,t) | Polar to Cartesian - result shown as x+yi |
-| deg | -- | Toggle DEG / RAD angle mode |
+| pol | pol(x,y) | Cartesian to polar |
+| rec | rec(r,t) | Polar to Cartesian |
+| deg | -- | Toggle DEG/RAD |
 | cplx | -- | Toggle a+bi / r>theta display |
 
-**Angle mode indicator:** shows deg or rad in the gap bar at all times.
-**Complex mode indicator:** shows pol in the gap bar when polar display is active.
-
-Number types: real, complex, pi, e, i, ans, named variables a-z.
-Memory: 12-entry history. Scroll top screen; press A to paste entry back.
+Number types: real, complex, pi, e, i, ans, variables a-z.
+Memory: 12-entry history, auto-saved. Press A on top screen to paste entry back.
 
 ---
 
@@ -64,11 +59,11 @@ Memory: 12-entry history. Scroll top screen; press A to paste entry back.
 
 Press SELECT to switch to the f(x) graph plotter.
 
-- sin(x), x^2-3, sqrt(1-x^2), tan(x), e^x, etc.
-- Asymptotes render as gaps - no false vertical lines
+- sin(x), x^2-3, sqrt(1-x^2), tan(x), etc.
+- Asymptotes render as gaps
 - Pan: circle pad | Zoom: L/R | Reset: X | Grid: Y
-- Parse errors shown in red, never crashes on bad input
-- Note: graph mode evaluates in radians. A rad-only warning shows when in DEG mode.
+- Parse errors shown in red - never crashes on bad input
+- Note: graph mode always uses radians. A warning shows when DEG mode is active.
 
 ---
 
@@ -76,7 +71,7 @@ Press SELECT to switch to the f(x) graph plotter.
 
 - Defaults to dark mode
 - Toggle: hold START then press SELECT
-- Theme change repaints all screens including equation history
+- Repaints all screens including equation history
 
 ---
 
@@ -88,28 +83,9 @@ Press SELECT to switch to the f(x) graph plotter.
 | START tap | Quit |
 | Hold START + SELECT | Toggle dark / light theme |
 
-**Calculator**
+**Calculator:** Touch=enter, A=calc, B=del, Y=clear, L/R=page, d-pad=cursor, X=focus, cpad=scroll
 
-| Input | Action |
-|---|---|
-| Touch keyboard | Enter expression |
-| A | Calculate |
-| B | Delete |
-| Y | Clear |
-| L / R | Switch keyboard page |
-| D-pad left/right | Move cursor |
-| X | Switch focus: keyboard / memory |
-| Circle pad | Scroll |
-
-**Graph mode**
-
-| Input | Action |
-|---|---|
-| Touch f(x) box | Open system keyboard |
-| Circle pad | Pan |
-| R / L | Zoom in / out |
-| X | Reset view |
-| Y | Toggle grid |
+**Graph:** Touch f(x)=keyboard, cpad=pan, R/L=zoom, X=reset, Y=grid
 
 ---
 
@@ -119,8 +95,8 @@ Press SELECT to switch to the f(x) graph plotter.
 |---|---|
 | [devkitPro](https://devkitpro.org/wiki/Getting_Started) | Select 3DS Development group |
 | devkitARM, libctru, citro2d/citro3d | Included in devkitPro |
-| [makerom v0.19+](https://github.com/3DSGuy/Project_CTR/releases) | CIA only - place exe in devkitPro\tools\bin |
-| [bannertool](https://github.com/diasurgical/bannertool/releases) | CIA only - place exe in devkitPro\tools\bin |
+| [makerom v0.19+](https://github.com/3DSGuy/Project_CTR/releases) | CIA only - place in devkitPro\tools\bin |
+| [bannertool](https://github.com/diasurgical/bannertool/releases) | CIA only - place in devkitPro\tools\bin |
 
  git clone --recurse-submodules https://github.com/Zushikina-kun/Calcula3DS-App.git
  cd Calcula3DS-App/CalculaThreeDS
@@ -129,25 +105,24 @@ Press SELECT to switch to the f(x) graph plotter.
 
 ---
 
-## Key bug fixes (all versions)
+## Key fixes
 
 | Where | Fix |
 |---|---|
-| main.cpp | APT_SetAppCpuTimeLimit caused svcBreak startup crash on Old 3DS - removed |
-| main.cpp | Heap sizes not set - now 16MB + 8MB explicit |
-| keyboard.cpp | menu.at() crash on More page - replaced with find() |
-| equation.cpp, number.cpp | equ.at() crash on unknown chars - replaced with find() |
-| Makefile | Added -fno-exceptions (exception unwinding corrupts heap on Old 3DS) |
-| expr_parser.cpp | try/catch replaced with strtod |
-| equation.cpp | Missing return on empty RPN |
-| main.cpp | Theme toggle did not repaint equation/memory textures |
+| equation.cpp | VFP static initializers for E/PI/i deferred to first calculate() call |
+| main.cpp | romfsInit before gfxInitDefault; null sprite check; removed debug init |
+| main.cpp | Explicit heap sizes 16MB+8MB; removed APT_SetAppCpuTimeLimit |
+| keyboard.cpp | All .at() -> .find(); dead YES_TINT code removed; theme repaint fix |
+| equation.cpp | All .at() -> .find(); .real() on double removed |
+| Makefile | -fno-exceptions -fno-rtti -D__3DS__ |
+| cia/app.rsf | IdealProcessor:0; makerom v0.19 format |
 
 ---
 
 ## Known limitations
 
 - One function at a time in graph mode
-- Graph mode evaluates in radians only (DEG mode is calculator-only)
+- Graph mode evaluates in radians only
 - No root-finding, derivative, or integral overlays
 
 ---
@@ -155,4 +130,4 @@ Press SELECT to switch to the f(x) graph plotter.
 ## Credits
 
 Original CalculaThreeDS by [LiquidFenrir](https://github.com/LiquidFenrir/CalculaThreeDS).
-Graph mode, theme system, scientific expansion, and fixes by [Zushikina-kun](https://github.com/Zushikina-kun).
+Graph mode, theme, scientific expansion, and fixes by [Zushikina-kun](https://github.com/Zushikina-kun).
